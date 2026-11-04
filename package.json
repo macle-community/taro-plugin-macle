@@ -1,0 +1,41 @@
+{
+  "name": "@tarojs/plugin-platform-macle",
+  "version": "1.0.0",
+  "description": "Taro 3/4 platform plugin for Macle (Huawei / Ethio Telecom Mini Program)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "taro",
+    "taro-plugin",
+    "platform",
+    "macle",
+    "miniprogram",
+    "huawei",
+    "ethio-telecom"
+  ],
+  "author": "Macle Team",
+  "license": "MIT",
+  "dependencies": {
+    "@tarojs/service": ">=3.6.0",
+    "@tarojs/shared": ">=3.6.0"
+  },
+  "peerDependencies": {
+    "@tarojs/service": ">=3.6.0",
+    "@tarojs/shared": ">=3.6.0"
+  },
+  "devDependencies": {
+    "@tarojs/service": "^4.0.0",
+    "@tarojs/shared": "^4.0.0",
+    "@types/node": "^18.15.11",
+    "typescript": "^5.0.4"
+  }
+}
+
