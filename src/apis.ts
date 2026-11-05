@@ -1,25 +1,37 @@
 import { processApis } from '@tarojs/shared'
-import { needPromiseApis } from './apis-list'
+import {
+  needPromiseApis,
+  syncApis,
+  creatorApis,
+  eventApis,
+  macleSpecificApis
+} from './apis-list'
 
 declare const ma: any
 declare const window: any
+declare const globalThis: any
 
-function getMacleGlobal (): any {
+/**
+ * Safely resolves the runtime Macle global object (ma / window.ma / globalThis.ma)
+ */
+export function getMacleGlobal (): any {
   if (typeof ma !== 'undefined') {
     return ma
   }
   if (typeof window !== 'undefined' && window.ma) {
     return window.ma
   }
+  if (typeof globalThis !== 'undefined' && (globalThis as any).ma) {
+    return (globalThis as any).ma
+  }
   return {}
 }
 
 /**
  * Normalizes navigation URL by stripping any redundant .html extension.
- * Macle framework's internal routing (Pe / O functions in service.js) automatically
- * appends .html during route resolution.
+ * Macle framework internal router automatically resolves page routes to .html.
  */
-function normalizeUrl (url: string): string {
+export function normalizeUrl (url: string): string {
   if (!url || typeof url !== 'string') return url
   const [path, query] = url.split('?')
   const cleanPath = path.replace(/(\.html)+$/i, '')
@@ -27,9 +39,9 @@ function normalizeUrl (url: string): string {
 }
 
 /**
- * Normalizes callback invocation into a Promise and invokes callbacks if provided
+ * Wraps a callback-based API into a Promise while preserving explicit callbacks if supplied.
  */
-function promisifyApi (fn: (...args: any[]) => any, context: any) {
+export function promisifyApi (fn: (...args: any[]) => any, context: any) {
   return (options: any = {}, ...args: any[]) => {
     return new Promise((resolve, reject) => {
       const opts = Object.assign({}, options)
@@ -60,26 +72,46 @@ function promisifyApi (fn: (...args: any[]) => any, context: any) {
 }
 
 /**
- * Initializes and binds native Macle APIs (ma.*) onto Taro object.
+ * Initializes and binds all native Macle APIs (ma.*) onto Taro object.
  */
 export function initNativeApi (taro: any) {
   const globalMa = getMacleGlobal()
+
+  // Dynamically auto-register any existing runtime functions on globalMa
+  for (const key in globalMa) {
+    if (
+      typeof globalMa[key] === 'function' &&
+      !syncApis.has(key) &&
+      !creatorApis.has(key) &&
+      !eventApis.has(key) &&
+      !key.startsWith('on') &&
+      !key.startsWith('off') &&
+      !key.endsWith('Sync')
+    ) {
+      needPromiseApis.add(key)
+    }
+  }
 
   // 1. Process standard Taro APIs through @tarojs/shared
   processApis(taro, globalMa, {
     needPromiseApis,
     modifyApis (apis: Set<string>) {
       needPromiseApis.forEach(api => apis.add(api))
+      macleSpecificApis.forEach(api => apis.add(api))
     },
     transformMeta (api: string, options: any) {
       let key = api
       let opts = options
+
+      // Route parameter normalization
       if (['navigateTo', 'redirectTo', 'reLaunch', 'switchTab'].includes(api) && opts && typeof opts.url === 'string') {
         opts = {
           ...opts,
           url: normalizeUrl(opts.url)
         }
       }
+
+      // TradePay parameter compatibility
       if (api === 'tradePay' && opts) {
         opts = {
           tradeNO: opts.tradeNO || opts.tradeNo || 'mock_trade_' + Date.now(),
@@ -89,6 +121,18 @@ export function initNativeApi (taro: any) {
           ...opts
         }
       }
+
+      // StartPay parameter compatibility
+      if (api === 'startPay' && opts) {
+        opts = {
+          prepayId: opts.prepayId || opts.tradeNO || 'mock_prepay_' + Date.now(),
+          orderInfo: opts.orderInfo || opts.orderStr || 'mock_order',
+          sign: opts.sign || 'mock_sign',
+          amount: opts.amount || '0.01',
+          ...opts
+        }
+      }
+
       return {
         key,
         options: opts
@@ -96,7 +140,7 @@ export function initNativeApi (taro: any) {
     }
   })
 
-  // 2. Direct bindings for Navigation APIs (guarantees URL normalization & Promise support)
+  // 2. Navigation APIs (guarantees URL normalization and Promise return)
   const navApis = ['navigateTo', 'redirectTo', 'reLaunch', 'switchTab']
   navApis.forEach(api => {
     taro[api] = (options: any = {}) => {
@@ -106,7 +150,6 @@ export function initNativeApi (taro: any) {
       if (typeof globalMa[api] === 'function') {
         return promisifyApi(globalMa[api], globalMa)(transformed)
       }
-      console.warn(`[Macle Plugin] ma.${api} is not available.`)
       return Promise.reject(new Error(`ma.${api} is not available.`))
     }
   })
@@ -118,56 +161,137 @@ export function initNativeApi (taro: any) {
     return Promise.reject(new Error('ma.navigateBack is not available.'))
   }
 
-  // 3. Direct bindings for UI Feedback APIs
-  const uiApis = ['showToast', 'hideToast', 'showModal', 'showLoading', 'hideLoading']
-  uiApis.forEach(api => {
+  // 3. Payment APIs (tradePay for Ethio Telecom, startPay for KBZ/partner)
+  taro.tradePay = (options: any = {}) => {
+    const opts = {
+      tradeNO: options.tradeNO || options.tradeNo || 'mock_trade_' + Date.now(),
+      sign: options.sign || 'mock_sign',
+      orderStr: options.orderStr || 'mock_order',
+      extendParam: options.extendParam || '',
+      ...options
+    }
+    if (typeof globalMa.tradePay === 'function') {
+      return promisifyApi(globalMa.tradePay, globalMa)(opts)
+    }
+    return Promise.reject(new Error('ma.tradePay is not available in current environment.'))
+  }
+
+  taro.startPay = (options: any = {}) => {
+    const opts = {
+      prepayId: options.prepayId || options.tradeNO || 'mock_prepay_' + Date.now(),
+      orderInfo: options.orderInfo || options.orderStr || 'mock_order',
+      sign: options.sign || 'mock_sign',
+      amount: options.amount || '0.01',
+      ...options
+    }
+    if (typeof globalMa.startPay === 'function') {
+      return promisifyApi(globalMa.startPay, globalMa)(opts)
+    }
+    return Promise.reject(new Error('ma.startPay is not available in current environment.'))
+  }
+
+  // 4. Context & Manager Factory Bindings (bound to globalMa)
+  const contextFactories = [
+    'createSelectorQuery',
+    'createAudioContext',
+    'createVideoContext',
+    'createCameraContext',
+    'createMapContext',
+    'createWebviewContext',
+    'getFileSystemManager',
+    'getRecorderManager',
+    'getUpdateManager'
+  ]
+  contextFactories.forEach(api => {
     if (typeof globalMa[api] === 'function') {
-      taro[api] = promisifyApi(globalMa[api], globalMa)
+      taro[api] = globalMa[api].bind(globalMa)
     }
   })
 
-  // 4. Direct bindings for System Info APIs
-  if (typeof globalMa.getSystemInfo === 'function') {
-    taro.getSystemInfo = promisifyApi(globalMa.getSystemInfo, globalMa)
-  }
-  if (typeof globalMa.getSystemInfoSync === 'function') {
-    taro.getSystemInfoSync = () => globalMa.getSystemInfoSync()
-  }
+  // 5. Synchronous APIs (direct pass-through)
+  syncApis.forEach(api => {
+    if (typeof globalMa[api] === 'function') {
+      taro[api] = globalMa[api].bind(globalMa)
+    }
+  })
 
-  // 5. Direct binding for Macle-specific APIs
-  if (typeof globalMa.tradePay === 'function') {
-    taro.tradePay = (options: any = {}) => {
-      const opts = {
-        tradeNO: options.tradeNO || options.tradeNo || 'mock_trade_' + Date.now(),
-        sign: options.sign || 'mock_sign',
-        orderStr: options.orderStr || 'mock_order',
-        extendParam: options.extendParam || '',
-        ...options
+  // 6. Event Listeners (on* / off*)
+  eventApis.forEach(api => {
+    if (typeof globalMa[api] === 'function') {
+      taro[api] = globalMa[api].bind(globalMa)
+    }
+  })
+
+  // 7. Macle-specific APIs
+  macleSpecificApis.forEach(api => {
+    if (typeof globalMa[api] === 'function' && !taro[api]) {
+      if (needPromiseApis.has(api)) {
+        taro[api] = promisifyApi(globalMa[api], globalMa)
+      } else {
+        taro[api] = globalMa[api].bind(globalMa)
       }
-      return promisifyApi(globalMa.tradePay, globalMa)(opts)
+    }
+  })
+
+  // 8. Sub-namespaces
+  if (globalMa.miniProgram) {
+    taro.miniProgram = globalMa.miniProgram
+  } else {
+    taro.miniProgram = {
+      postMessage: (data: any) => globalMa.postMessage ? globalMa.postMessage(data) : undefined,
+      close: () => globalMa.exitMiniProgram ? globalMa.exitMiniProgram() : undefined,
+      getEnv: (cb: (res: { miniprogram: boolean }) => void) => cb ? cb({ miniprogram: true }) : undefined
     }
   }
 
-  if (typeof globalMa.gotoBrowser === 'function') {
-    taro.gotoBrowser = globalMa.gotoBrowser.bind(globalMa)
-  }
-  if (typeof globalMa.saveFileToPhone === 'function') {
-    taro.saveFileToPhone = globalMa.saveFileToPhone.bind(globalMa)
-  }
-  if (typeof globalMa.capsuleStyle === 'function') {
-    taro.capsuleStyle = globalMa.capsuleStyle.bind(globalMa)
-  }
-
-  if (globalMa.miniProgram) {
-    taro.miniProgram = globalMa.miniProgram
+  taro.env = {
+    ...(taro.env || {}),
+    ...(globalMa.env || {}),
+    USER_DATA_PATH: (globalMa.env && globalMa.env.USER_DATA_PATH) || 'mafile://usr'
   }
 
   taro.getRenderer = function () {
     return 'webview'
   }
 
-  // Universal export for service window
+  // 9. Dynamic Fallback Proxy via Prototype Chain
+  // Automatically catches ANY ma.* API present on globalMa that may not be explicitly listed
+  if (typeof Proxy !== 'undefined') {
+    const fallbackProxy = new Proxy({}, {
+      get (_, prop: string | symbol) {
+        if (typeof prop === 'string' && typeof globalMa[prop] !== 'undefined') {
+          const val = globalMa[prop]
+          if (typeof val === 'function') {
+            if (needPromiseApis.has(prop)) {
+              return promisifyApi(val, globalMa)
+            }
+            return val.bind(globalMa)
+          }
+          return val
+        }
+        return undefined
+      }
+    })
+    try {
+      Object.setPrototypeOf(taro, fallbackProxy)
+    } catch {
+      // Fallback if prototype modification is restricted
+    }
+  }
+
+  // 10. Global Expose in window & globalThis
   if (typeof window !== 'undefined') {
     window.Taro = taro
+    if (!window.ma && Object.keys(globalMa).length > 0) {
+      window.ma = globalMa
+    }
   }
+  if (typeof globalThis !== 'undefined') {
+    (globalThis as any).Taro = taro
+    if (!(globalThis as any).ma && Object.keys(globalMa).length > 0) {
+      (globalThis as any).ma = globalMa
+    }
+  }
+
+  return taro
 }

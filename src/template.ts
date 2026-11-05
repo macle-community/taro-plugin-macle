@@ -1,5 +1,7 @@
 import { UnRecursiveTemplate } from '@tarojs/shared/dist/template'
+import { toDashed } from '@tarojs/shared'
 import type { IOptions } from './index'
+import { mauiComponents } from './components'
 
 export class Template extends UnRecursiveTemplate {
   pluginOptions: IOptions
@@ -26,6 +28,57 @@ export class Template extends UnRecursiveTemplate {
   constructor (pluginOptions: IOptions = {}) {
     super()
     this.pluginOptions = pluginOptions
+
+    if (pluginOptions.maui !== false) {
+      // Configure nestElements for MAUI components
+      const containerComps = new Set([
+        'maui-cell-group', 'maui-row', 'maui-col', 'maui-tabs', 'maui-tab',
+        'maui-sidebar', 'maui-popup', 'maui-overlay', 'maui-dialog', 'maui-list'
+      ])
+      for (const key of Object.keys(mauiComponents)) {
+        const dashed = toDashed(key)
+        this.nestElements.set(dashed, containerComps.has(dashed) ? 3 : 2)
+      }
+
+      // Override buildTemplate to ensure MAUI components are registered in thirdPartyComponents
+      const origBuildTemplate = this.buildTemplate
+      this.buildTemplate = (compConfig: any) => {
+        if (this.pluginOptions.maui !== false && compConfig && compConfig.thirdPartyComponents) {
+          this.registerMauiComponents(compConfig.thirdPartyComponents)
+        }
+        return origBuildTemplate.call(this, compConfig)
+      }
+    }
+  }
+
+  /**
+   * Register MAUI components into Taro's thirdPartyComponents map
+   * This automatically generates <template name="tmpl_0_maui-*"> and <template name="tmpl_1_maui-*">
+   * with complete, uncompressed property bindings and event handlers in base.maml.
+   */
+  registerMauiComponents (thirdPartyComponents: Map<string, Set<string>>) {
+    for (const [key, props] of Object.entries(mauiComponents)) {
+      const dashedName = toDashed(key)
+      let attrSet = thirdPartyComponents.get(dashedName)
+      if (!attrSet) {
+        attrSet = new Set<string>()
+        thirdPartyComponents.set(dashedName, attrSet)
+      }
+
+      // Always include layout, style and standard click event triggers
+      attrSet.add('class')
+      attrSet.add('style')
+      attrSet.add('bindtap')
+
+      for (const propName of Object.keys(props)) {
+        if (propName === 'id') continue
+        if (propName.startsWith('bind')) {
+          attrSet.add(propName.toLowerCase())
+        } else {
+          attrSet.add(toDashed(propName))
+        }
+      }
+    }
   }
 
   /**
