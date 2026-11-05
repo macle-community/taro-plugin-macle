@@ -41,10 +41,14 @@ export class Template extends UnRecursiveTemplate {
       }
 
       // Override buildTemplate to ensure MAUI components are registered in thirdPartyComponents
+      // and all standard components are included in base.maml
       const origBuildTemplate = this.buildTemplate
       this.buildTemplate = (compConfig: any) => {
-        if (this.pluginOptions.maui !== false && compConfig && compConfig.thirdPartyComponents) {
-          this.registerMauiComponents(compConfig.thirdPartyComponents)
+        if (compConfig) {
+          compConfig.includeAll = true
+          if (this.pluginOptions.maui !== false && compConfig.thirdPartyComponents) {
+            this.registerMauiComponents(compConfig.thirdPartyComponents)
+          }
         }
         return origBuildTemplate.call(this, compConfig)
       }
@@ -91,6 +95,7 @@ export class Template extends UnRecursiveTemplate {
       this.transferComponents['page-meta'] = result['page-meta']
       delete result['page-meta']
     }
+    delete result['script']
     return result
   }
 

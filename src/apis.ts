@@ -77,23 +77,30 @@ export function promisifyApi (fn: (...args: any[]) => any, context: any) {
 export function initNativeApi (taro: any) {
   const globalMa = getMacleGlobal()
 
-  // Dynamically auto-register any existing runtime functions on globalMa
-  for (const key in globalMa) {
-    if (
-      typeof globalMa[key] === 'function' &&
-      !syncApis.has(key) &&
-      !creatorApis.has(key) &&
-      !eventApis.has(key) &&
-      !key.startsWith('on') &&
-      !key.startsWith('off') &&
-      !key.endsWith('Sync')
-    ) {
-      needPromiseApis.add(key)
+  // 1. Create a safe wrapper proxy for Taro's processApis:
+  // Macle's service.js exposes window.ma as a Proxy where hasOwnProperty() returns false for all APIs.
+  // Taro's processApis checks hasOwnProperty before invoking, which causes "小程序暂不支持 <api>".
+  // This wrapper intercepts hasOwnProperty so all valid Macle APIs pass through without modifying window.ma.
+  const maWrapper = new Proxy(globalMa, {
+    get (target, prop, receiver) {
+      if (prop === 'hasOwnProperty') {
+        return (key: string) => {
+          return Boolean(
+            needPromiseApis.has(key) ||
+            syncApis.has(key) ||
+            creatorApis.has(key) ||
+            eventApis.has(key) ||
+            macleSpecificApis.has(key) ||
+            (typeof key === 'string' && key in target)
+          )
+        }
+      }
+      return target[prop]
     }
-  }
+  })
 
-  // 1. Process standard Taro APIs through @tarojs/shared
-  processApis(taro, globalMa, {
+  // 2. Process standard Taro APIs through @tarojs/shared with maWrapper
+  processApis(taro, maWrapper, {
     needPromiseApis,
     modifyApis (apis: Set<string>) {
       needPromiseApis.forEach(api => apis.add(api))
@@ -140,28 +147,30 @@ export function initNativeApi (taro: any) {
     }
   })
 
-  // 2. Navigation APIs (guarantees URL normalization and Promise return)
+  // 3. Navigation APIs (guarantees URL normalization, Promise return, and call-time dispatch)
   const navApis = ['navigateTo', 'redirectTo', 'reLaunch', 'switchTab']
   navApis.forEach(api => {
     taro[api] = (options: any = {}) => {
       const transformed = options && typeof options.url === 'string'
         ? { ...options, url: normalizeUrl(options.url) }
         : options
-      if (typeof globalMa[api] === 'function') {
-        return promisifyApi(globalMa[api], globalMa)(transformed)
+      const m = getMacleGlobal()
+      if (typeof m[api] === 'function') {
+        return promisifyApi(m[api], m)(transformed)
       }
       return Promise.reject(new Error(`ma.${api} is not available.`))
     }
   })
 
   taro.navigateBack = (options: any = {}) => {
-    if (typeof globalMa.navigateBack === 'function') {
-      return promisifyApi(globalMa.navigateBack, globalMa)(options)
+    const m = getMacleGlobal()
+    if (typeof m.navigateBack === 'function') {
+      return promisifyApi(m.navigateBack, m)(options)
     }
     return Promise.reject(new Error('ma.navigateBack is not available.'))
   }
 
-  // 3. Payment APIs (tradePay for Ethio Telecom, startPay for KBZ/partner)
+  // 4. Payment APIs (tradePay for Ethio Telecom, startPay for KBZ/partner)
   taro.tradePay = (options: any = {}) => {
     const opts = {
       tradeNO: options.tradeNO || options.tradeNo || 'mock_trade_' + Date.now(),
@@ -170,8 +179,9 @@ export function initNativeApi (taro: any) {
       extendParam: options.extendParam || '',
       ...options
     }
-    if (typeof globalMa.tradePay === 'function') {
-      return promisifyApi(globalMa.tradePay, globalMa)(opts)
+    const m = getMacleGlobal()
+    if (typeof m.tradePay === 'function') {
+      return promisifyApi(m.tradePay, m)(opts)
     }
     return Promise.reject(new Error('ma.tradePay is not available in current environment.'))
   }
@@ -184,13 +194,14 @@ export function initNativeApi (taro: any) {
       amount: options.amount || '0.01',
       ...options
     }
-    if (typeof globalMa.startPay === 'function') {
-      return promisifyApi(globalMa.startPay, globalMa)(opts)
+    const m = getMacleGlobal()
+    if (typeof m.startPay === 'function') {
+      return promisifyApi(m.startPay, m)(opts)
     }
     return Promise.reject(new Error('ma.startPay is not available in current environment.'))
   }
 
-  // 4. Context & Manager Factory Bindings (bound to globalMa)
+  // 5. Context & Manager Factory Bindings (dispatched at invocation time)
   const contextFactories = [
     'createSelectorQuery',
     'createAudioContext',
@@ -203,43 +214,63 @@ export function initNativeApi (taro: any) {
     'getUpdateManager'
   ]
   contextFactories.forEach(api => {
-    if (typeof globalMa[api] === 'function') {
-      taro[api] = globalMa[api].bind(globalMa)
-    }
-  })
-
-  // 5. Synchronous APIs (direct pass-through)
-  syncApis.forEach(api => {
-    if (typeof globalMa[api] === 'function') {
-      taro[api] = globalMa[api].bind(globalMa)
-    }
-  })
-
-  // 6. Event Listeners (on* / off*)
-  eventApis.forEach(api => {
-    if (typeof globalMa[api] === 'function') {
-      taro[api] = globalMa[api].bind(globalMa)
-    }
-  })
-
-  // 7. Macle-specific APIs
-  macleSpecificApis.forEach(api => {
-    if (typeof globalMa[api] === 'function' && !taro[api]) {
-      if (needPromiseApis.has(api)) {
-        taro[api] = promisifyApi(globalMa[api], globalMa)
-      } else {
-        taro[api] = globalMa[api].bind(globalMa)
+    taro[api] = (...args: any[]) => {
+      const m = getMacleGlobal()
+      if (typeof m[api] === 'function') {
+        return m[api](...args)
       }
     }
   })
 
-  // 8. Sub-namespaces
+  // 6. Synchronous APIs (direct pass-through at invocation time)
+  syncApis.forEach(api => {
+    taro[api] = (...args: any[]) => {
+      const m = getMacleGlobal()
+      if (typeof m[api] === 'function') {
+        return m[api](...args)
+      }
+    }
+  })
+
+  // 7. Event Listeners (on* / off*)
+  eventApis.forEach(api => {
+    taro[api] = (...args: any[]) => {
+      const m = getMacleGlobal()
+      if (typeof m[api] === 'function') {
+        return m[api](...args)
+      }
+    }
+  })
+
+  // 8. Macle-specific APIs
+  macleSpecificApis.forEach(api => {
+    if (!taro[api]) {
+      taro[api] = (options: any = {}, ...args: any[]) => {
+        const m = getMacleGlobal()
+        if (typeof m[api] === 'function') {
+          if (needPromiseApis.has(api)) {
+            return promisifyApi(m[api], m)(options, ...args)
+          }
+          return m[api](options, ...args)
+        }
+        return Promise.reject(new Error(`ma.${api} is not available.`))
+      }
+    }
+  })
+
+  // 9. Sub-namespaces
   if (globalMa.miniProgram) {
     taro.miniProgram = globalMa.miniProgram
   } else {
     taro.miniProgram = {
-      postMessage: (data: any) => globalMa.postMessage ? globalMa.postMessage(data) : undefined,
-      close: () => globalMa.exitMiniProgram ? globalMa.exitMiniProgram() : undefined,
+      postMessage: (data: any) => {
+        const m = getMacleGlobal()
+        return m.postMessage ? m.postMessage(data) : undefined
+      },
+      close: () => {
+        const m = getMacleGlobal()
+        return m.exitMiniProgram ? m.exitMiniProgram() : undefined
+      },
       getEnv: (cb: (res: { miniprogram: boolean }) => void) => cb ? cb({ miniprogram: true }) : undefined
     }
   }
@@ -254,20 +285,22 @@ export function initNativeApi (taro: any) {
     return 'webview'
   }
 
-  // 9. Dynamic Fallback Proxy via Prototype Chain
-  // Automatically catches ANY ma.* API present on globalMa that may not be explicitly listed
+  // 10. Dynamic Fallback Proxy via Prototype Chain
+  // Catches ANY dynamic ma.* API at call time
   if (typeof Proxy !== 'undefined') {
     const fallbackProxy = new Proxy({}, {
       get (_, prop: string | symbol) {
-        if (typeof prop === 'string' && typeof globalMa[prop] !== 'undefined') {
-          const val = globalMa[prop]
-          if (typeof val === 'function') {
+        if (typeof prop === 'string') {
+          const m = getMacleGlobal()
+          if (typeof m[prop] === 'function') {
             if (needPromiseApis.has(prop)) {
-              return promisifyApi(val, globalMa)
+              return (options: any = {}, ...args: any[]) => promisifyApi(m[prop], m)(options, ...args)
             }
-            return val.bind(globalMa)
+            return (...args: any[]) => m[prop](...args)
           }
-          return val
+          if (typeof m[prop] !== 'undefined') {
+            return m[prop]
+          }
         }
         return undefined
       }
@@ -275,21 +308,21 @@ export function initNativeApi (taro: any) {
     try {
       Object.setPrototypeOf(taro, fallbackProxy)
     } catch {
-      // Fallback if prototype modification is restricted
+      // Fallback
     }
   }
 
-  // 10. Global Expose in window & globalThis
+  // 11. Expose Taro and ensure ma is available on window and globalThis
   if (typeof window !== 'undefined') {
     window.Taro = taro
-    if (!window.ma && Object.keys(globalMa).length > 0) {
-      window.ma = globalMa
+    if (typeof window.ma === 'undefined' && typeof ma !== 'undefined') {
+      window.ma = ma
     }
   }
   if (typeof globalThis !== 'undefined') {
     (globalThis as any).Taro = taro
-    if (!(globalThis as any).ma && Object.keys(globalMa).length > 0) {
-      (globalThis as any).ma = globalMa
+    if (typeof (globalThis as any).ma === 'undefined' && typeof ma !== 'undefined') {
+      (globalThis as any).ma = ma
     }
   }
 
