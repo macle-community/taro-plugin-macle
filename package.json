@@ -1,5 +1,5 @@
 {
-  "name": "@tarojs/plugin-platform-macle",
+  "name": "@macle-community/taro-plugin-macle",
   "version": "1.0.0",
   "description": "Taro 3/4 platform plugin for Macle (Huawei / Ethio Telecom Mini Program)",
   "main": "dist/index.js",
@@ -23,6 +23,9 @@
   ],
   "author": "Macle Team",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@tarojs/service": ">=3.6.0",
     "@tarojs/shared": ">=3.6.0"
