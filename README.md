@@ -61,3 +61,4 @@ This plugin includes full support and TypeScript definitions for Macle's **MAUI*
 ## 📄 License
 
 MIT © [Macle Community & natiDotnet](https://github.com/natiDotnet)
+
