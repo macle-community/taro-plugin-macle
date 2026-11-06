@@ -273,6 +273,11 @@ export interface MacleGlobal {
   startPay (options: StartPayOptions): Promise<any>
   getKbzBackendServerUrl (): string
 
+  // Webview & Messaging
+  createWebviewContext (webviewId?: string): any
+  postMessage (message: any): Promise<any>
+  onMessage (callback: Function): void
+
   // Capsule & Swipe controls
   capsuleStyle (options: CapsuleStyleOptions): Promise<any>
   setCapsuleShow (options: SetCapsuleShowOptions): Promise<any>
@@ -310,4 +315,57 @@ export interface MacleGlobal {
 
 declare global {
   const ma: MacleGlobal
+}
+
+export interface MauiModalProps {
+  visible?: boolean
+  title?: string
+  content?: string
+  type?: 'default' | string
+  closable?: boolean
+  maskClosable?: boolean
+  destroyOnClose?: boolean
+  maskStyle?: string
+  bodyStyle?: string
+  bodyClassName?: string
+  primaryButtonText?: string
+  primaryButtonStyle?: string
+  secondaryButtonText?: string
+  secondaryButtonStyle?: string
+  cancelButtonText?: string
+  cancelButtonStyle?: string
+  zIndex?: number
+  className?: string
+  style?: string | any
+  onClose?: (event?: any) => void
+  onPrimaryButtonTap?: (event?: any) => void
+  onSecondaryButtonTap?: (event?: any) => void
+  onCancelButtonTap?: (event?: any) => void
+  children?: any
+}
+
+export interface MauiListProps {
+  header?: string
+  footer?: string
+  radius?: boolean
+  className?: string
+  style?: string | any
+  children?: any
+}
+
+export interface MauiListItemProps {
+  title?: string
+  brief?: string
+  extra?: string
+  extraBrief?: string
+  arrow?: 'right' | 'up' | 'down' | ''
+  disabled?: boolean
+  showDivider?: boolean
+  radius?: boolean
+  image?: string
+  className?: string
+  style?: string | any
+  onClick?: (event: any) => void
+  onTap?: (event: any) => void
+  children?: any
 }

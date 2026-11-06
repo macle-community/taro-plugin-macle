@@ -35,6 +35,22 @@ export interface IOptions {
    */
   enablekeyboardAccessory?: boolean
   /**
+   * List of custom native APIs exposed by the host app to bridge into Taro
+   */
+  customApis?: string[]
+  /**
+   * Optional Webpack devtool setting
+   */
+  devtool?: any
+  /**
+   * Optional Webpack mode override
+   */
+  mode?: 'development' | 'production' | 'none'
+  /**
+   * Custom Webpack loaders
+   */
+  loaders?: Array<{ test: RegExp; loader: string }>
+  /**
    * Enable or configure Tailwind CSS support for Macle
    * When enabled or when tailwind.config.js is detected, automatically integrates
    * weapp-tailwindcss Webpack 5 plugin with Macle stylesheet (.mass/.macss)

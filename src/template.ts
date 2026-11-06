@@ -30,10 +30,14 @@ export class Template extends UnRecursiveTemplate {
     this.pluginOptions = pluginOptions
 
     if (pluginOptions.maui !== false) {
+      // Void elements that do not have a default <slot /> in MAML
+      this.voidElements.add('maui-modal')
+
       // Configure nestElements for MAUI components
       const containerComps = new Set([
         'maui-cell-group', 'maui-row', 'maui-col', 'maui-tabs', 'maui-tab',
-        'maui-sidebar', 'maui-popup', 'maui-overlay', 'maui-dialog', 'maui-list'
+        'maui-sidebar', 'maui-popup', 'maui-overlay', 'maui-dialog', 'maui-list',
+        'maui-list-item'
       ])
       for (const key of Object.keys(mauiComponents)) {
         const dashed = toDashed(key)
@@ -122,15 +126,59 @@ export class Template extends UnRecursiveTemplate {
   }
 
   /**
+   * Support keyboard-accessory slot inside textarea / input
+   */
+  modifyTemplateResult = (res: string, nodeName: string, _level: any, children: string) => {
+    if (nodeName === 'keyboard-accessory') {
+      return ''
+    }
+    if ((nodeName === 'textarea' || nodeName === 'input') && this.pluginOptions.enablekeyboardAccessory) {
+      const list = res.split('</template>')
+      const target = `
+        <keyboard-accessory style="{{i.cn[0].st}}" class="{{i.cn[0].cl}}" bindtap="eh" id="{{i.cn[0].uid||i.cn[0].sid}}" data-sid="{{i.cn[0].sid}}">
+            <block ma:for="{{i.cn[0].cn}}" ma:key="sid">
+                <template is="{{xs.e(cid+1)}}" data="{{i:item,l:l}}" />
+            </block>
+        </keyboard-accessory>
+      `
+      const templateFocus = list[1]?.replace(children, target).replace(`_${nodeName}_focus`, `_${nodeName}_focus_ka`)
+      const templateBlur = list[2]?.replace(children, target).replace(`_${nodeName}_blur`, `_${nodeName}_blur_ka`)
+      if (templateFocus && templateBlur) {
+        list.splice(3, 0, templateFocus, templateBlur)
+        return list.join('</template>')
+      }
+    }
+    return res
+  }
+
+  buildXSTepFocus (nn: string) {
+    return this.pluginOptions.enablekeyboardAccessory ? `
+        function(i, prefix) {
+            const s = i.focus !== undefined ? 'focus' : 'blur' ;
+            var r = prefix + i.${nn} + '_' + s ;
+            if ((i.nn === 'textarea' || i.nn === 'input') && 
+                i.cn[0] && 
+                i.cn[0].nn === 'keyboard-accessory') {
+                r = r + '_ka' ;
+            }
+            return r ;
+        }
+    ` : super.buildXSTepFocus(nn)
+  }
+
+  /**
    * Replace/normalize property and event names for Macle templates
    */
-  replacePropName (name: string, value: string, componentName: string, componentAlias: any) {
+  replacePropName (name: string, value: string, componentName: string, componentAlias?: any) {
     if (value === 'eh') {
       const nameLowerCase = name.toLowerCase()
-      if (nameLowerCase === 'bindlongtap') {
+      if (nameLowerCase === 'bindlongtap' && componentName !== 'canvas') {
         return 'bindlongpress'
       }
       return nameLowerCase
+    }
+    if (componentName === 'share-element' && value === 'i.mapkey') {
+      return 'key'
     }
     return name
   }

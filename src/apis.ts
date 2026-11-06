@@ -285,6 +285,12 @@ export function initNativeApi (taro: any) {
     return 'webview'
   }
 
+  taro.getTabBar = function (pageCtx: any) {
+    if (typeof pageCtx?.getTabBar === 'function') {
+      return pageCtx.getTabBar()?.$taroInstances
+    }
+  }
+
   // 10. Dynamic Fallback Proxy via Prototype Chain
   // Catches ANY dynamic ma.* API at call time
   if (typeof Proxy !== 'undefined') {

@@ -8,6 +8,29 @@ import type { IOptions, IMauiOptions } from './index'
 
 const PACKAGE_NAME = '@tarojs/plugin-platform-macle'
 
+const PAGE_META = `<page-meta
+background-color-bottom="{{pageMeta.backgroundColorBottom}}"
+background-color-top="{{pageMeta.backgroundColorTop}}"
+background-color="{{pageMeta.backgroundColor}}"
+background-text-style="{{pageMeta.backgroundTextStyle}}"
+page-font-size="{{pageMeta.pageFontSize}}"
+page-orientation="{{pageMeta.pageOrientation}}"
+page-style="{{pageMeta.pageStyle}}"
+root-background-color="{{pageMeta.rootBackgroundColor}}"
+root-font-size="{{pageMeta.rootFontSize}}"
+scroll-duration="{{pageMeta.scrollDuration}}"
+scroll-top="{{pageMeta.scrollTop}}"
+>
+    <navigation-bar
+        background-color="{{navigationBar.backgroundColor}}"
+        color-animation-duration="{{navigationBar.colorAnimationDuration}}"
+        color-animation-timing-func="{{navigationBar.colorAnimationTimingFunc}}"
+        front-color="{{navigationBar.frontColor}}"
+        loading="{{navigationBar.loading}}"
+        title="{{navigationBar.title}}"
+    />
+</page-meta>`
+
 /**
  * Searches for the official MAUI component dist directory
  */
@@ -16,6 +39,10 @@ function findMauiSourceDir (customDir?: string): string | null {
 
   const cwd = process.cwd()
   const candidates = [
+    path.resolve(__dirname, '../../DevToolkit_26.6.0/DevToolkit_26.6.0-LG0001/Macle_26.6.0-LG0001_DevSuite_UI/dist'),
+    path.resolve(__dirname, '../DevToolkit_26.6.0/DevToolkit_26.6.0-LG0001/Macle_26.6.0-LG0001_DevSuite_UI/dist'),
+    path.resolve(cwd, '../DevToolkit_26.6.0/DevToolkit_26.6.0-LG0001/Macle_26.6.0-LG0001_DevSuite_UI/dist'),
+    path.resolve(cwd, 'DevToolkit_26.6.0/DevToolkit_26.6.0-LG0001/Macle_26.6.0-LG0001_DevSuite_UI/dist'),
     path.resolve(__dirname, '../../DevToolkit_25.9.0/Macle_25.9.0_DevSuite_UI/dist'),
     path.resolve(__dirname, '../DevToolkit_25.9.0/Macle_25.9.0_DevSuite_UI/dist'),
     path.resolve(__dirname, '../../../DevToolkit_25.9.0/Macle_25.9.0_DevSuite_UI/dist'),
@@ -38,10 +65,10 @@ export function getMauiUsingComponents (targetSubdir: string = 'maui-components'
   const compNames = [
     'button', 'cell', 'cell-group', 'checkbox', 'checkbox-group',
     'col', 'row', 'dialog', 'divider', 'empty', 'field', 'icon',
-    'image', 'loading', 'overlay', 'popup', 'progress', 'radio',
-    'radio-group', 'sidebar', 'sidebar-item', 'slider', 'stepper',
-    'steps', 'sticky', 'switch', 'tab', 'tabs', 'tag', 'title-bar',
-    'toast'
+    'image', 'list', 'list-item', 'loading', 'modal', 'overlay',
+    'popup', 'progress', 'radio', 'radio-group', 'sidebar',
+    'sidebar-item', 'slider', 'stepper', 'steps', 'sticky', 'switch',
+    'tab', 'tabs', 'tag', 'title-bar', 'toast'
   ]
   const map: Record<string, string> = {}
   for (const name of compNames) {
@@ -108,6 +135,8 @@ export class Macle extends TaroPlatformBase {
       close: () => {
         this.modifyTemplate(pluginOptions)
         this.modifyWebpackConfig(styleExt, pluginOptions)
+        this.onCompilerMake(this.ctx)
+        this.modifyBuildAssets(this.ctx, pluginOptions)
       }
     })
   }
@@ -175,10 +204,128 @@ export class Macle extends TaroPlatformBase {
         this.setupTailwindcss(chain, pluginOptions)
       }
 
+      // Apply config options matching official DevSuite_Uni
+      if (pluginOptions.devtool) {
+        chain.devtool(pluginOptions.devtool)
+      }
+      if (pluginOptions.mode) {
+        chain.mode(pluginOptions.mode)
+      }
+      if (Array.isArray(pluginOptions.loaders)) {
+        pluginOptions.loaders.forEach((loader: any) => {
+          if (loader.test && loader.loader) {
+            chain.module.rule('load').test(loader.test).use('macle').loader(loader.loader)
+          }
+        })
+      }
+
       // MAUI UI Component Library integration
       const isMauiEnabled = pluginOptions.maui !== false
       if (isMauiEnabled) {
         this.setupMauiComponents(chain, pluginOptions)
+      }
+    })
+  }
+
+  /**
+   * Safe Proxy around this.ma to support Webpack's dynamic JSONP chunk loading
+   */
+  onCompilerMake (ctx: any) {
+    ctx.onCompilerMake(({ compilation }: any) => {
+      try {
+        if (compilation.mainTemplate && compilation.mainTemplate.hooks) {
+          // Note: In Webpack 5, beforeStartup getter throws an error.
+          // Safely check without triggering the throwing getter.
+          const hookDesc = Object.getOwnPropertyDescriptor(compilation.mainTemplate.hooks, 'beforeStartup')
+          if (hookDesc && typeof hookDesc.value?.tap === 'function') {
+            hookDesc.value.tap('JsonpMainTemplatePlugin', (source: string) => {
+              return [
+                'if (this.Proxy) {',
+                '    let nma = this.ma;',
+                '    this.ma = new Proxy({}, {',
+                '        get: function (obj, prop) {',
+                "            if (prop === 'webpackJsonp') {",
+                "                return this['webpackJsonp'] = this['webpackJsonp'] || []",
+                '            }',
+                '            return nma[prop]',
+                '        }',
+                '    })',
+                '}',
+                source
+              ].join('\n')
+            })
+          }
+        }
+      } catch (e) {
+        // Safe fallback for Webpack 5 runner
+      }
+    })
+  }
+
+  /**
+   * Modify build assets:
+   * 1. Inject customApis into app.js
+   * 2. Dynamically prepend <page-meta> on pages using .setData()
+   * 3. Inject page { height: 100%; } in app.mass to fix scroll jump on navigateBack
+   */
+  modifyBuildAssets (ctx: any, pluginOptions: IOptions) {
+    ctx.modifyBuildAssets(({ assets, miniPlugin }: any) => {
+      // 1. Custom APIs injection
+      if (pluginOptions?.customApis && Array.isArray(pluginOptions.customApis)) {
+        const customApis = pluginOptions.customApis.map((api: string) => `"${api}"`).join(',')
+        const appjs = assets['app.js']
+        if (appjs) {
+          const appSource = appjs.source().toString().replace(
+            /("|')customApiPlaceholdIdentity("|')/,
+            customApis
+          )
+          appjs.source = () => appSource
+        }
+      }
+
+      // 2. Dynamic <page-meta> injection on pages using .setData()
+      miniPlugin?.pages?.forEach((page: any) => {
+        const jsKey = Object.keys(assets).find(k => k === page.name + '.js')
+        const mamlKey = Object.keys(assets).find(k => k === page.name + '.maml' || k === page.name + '.wxml')
+        if (jsKey && mamlKey) {
+          const jsAsset = assets[jsKey]
+          const mamlAsset = assets[mamlKey]
+          if (jsAsset && mamlAsset) {
+            const jsSource = jsAsset.source().toString()
+            if (/\.setData\([\s]*\{/.test(jsSource)) {
+              const currentMaml = mamlAsset.source().toString()
+              if (!currentMaml.includes('<page-meta')) {
+                const updatedMaml = [
+                  PAGE_META,
+                  currentMaml
+                ].join('\n')
+                mamlAsset.source = () => updatedMaml
+                if (typeof mamlAsset.size === 'function') {
+                  const len = Buffer.byteLength(updatedMaml, 'utf-8')
+                  mamlAsset.size = () => len
+                }
+              }
+            }
+          }
+        }
+      })
+
+      // 3. Fix navigateBack scroll jump to top by ensuring page height 100%
+      for (const massKey of Object.keys(assets)) {
+        if (/^app\.(mass|macss|wxss|css)$/.test(massKey)) {
+          const appMass = assets[massKey]
+          if (appMass) {
+            const current = appMass.source().toString()
+            if (!current.includes('height: 100%') && !current.includes('height:100%')) {
+              const updatedMass = ['page {', '   height: 100%;', '}', current].join('\n')
+              appMass.source = () => updatedMass
+              if (typeof appMass.size === 'function') {
+                const len = Buffer.byteLength(updatedMass, 'utf-8')
+                appMass.size = () => len
+              }
+            }
+          }
+        }
       }
     })
   }
@@ -260,6 +407,35 @@ export class Macle extends TaroPlatformBase {
     fs.mkdirSync(destDir, { recursive: true })
     fs.cpSync(sourceDir, destDir, { recursive: true })
 
+    // Patch MAUI common/component.js to ensure all custom components delegate 'eh' events to the active Page
+    const commonCompPath = path.join(destDir, 'common/component.js')
+    if (fs.existsSync(commonCompPath)) {
+      try {
+        let code = fs.readFileSync(commonCompPath, 'utf-8')
+        if (!code.includes('options.methods.eh')) {
+          const delegateSnippet = `
+  options.methods = options.methods || {};
+  if (!options.methods.eh) {
+    options.methods.eh = function(event) {
+      if (typeof getCurrentPages === 'function') {
+        const pages = getCurrentPages();
+        const page = pages[pages.length - 1];
+        if (page && typeof page.eh === 'function') {
+          return page.eh(event);
+        }
+      }
+    };
+  }
+`
+          code = code.replace(
+            'const options = Object.assign({}, maOptions);',
+            `const options = Object.assign({}, maOptions);${delegateSnippet}`
+          )
+          fs.writeFileSync(commonCompPath, code, 'utf-8')
+        }
+      } catch (e) {}
+    }
+
     // Also ensure disk app.json has usingComponents in case it was written earlier
     const usingComponents = getMauiUsingComponents(targetDir)
     const diskAppJson = path.join(outPath, 'app.json')
@@ -274,7 +450,20 @@ export class Macle extends TaroPlatformBase {
       } catch (e) {}
     }
 
-    console.log(`[\x1b[32mplugin-platform-macle\x1b[0m] MAUI component library active: 31 native components available at /${targetDir}`)
+    // Ensure app.mass has page { height: 100%; } at the top (fixes navigateBack scroll jump)
+    for (const styleName of ['app.mass', 'app.macss']) {
+      const diskAppMass = path.join(outPath, styleName)
+      if (fs.existsSync(diskAppMass)) {
+        try {
+          const content = fs.readFileSync(diskAppMass, 'utf-8')
+          if (!content.includes('height: 100%') && !content.includes('height:100%')) {
+            fs.writeFileSync(diskAppMass, `page {\n  height: 100%;\n}\n${content}`, 'utf-8')
+          }
+        } catch (e) {}
+      }
+    }
+
+    console.log(`[\x1b[32mplugin-platform-macle\x1b[0m] MAUI component library active: 34 native components available at /${targetDir}`)
   }
 
   /**
