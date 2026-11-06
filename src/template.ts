@@ -40,6 +40,28 @@ export class Template extends UnRecursiveTemplate {
         this.nestElements.set(dashed, containerComps.has(dashed) ? 3 : 2)
       }
 
+      // Populate thirdPartyPatcher with MAUI component default prop values
+      // This ensures attributes like direction="horizontal", active-color="#07c160",
+      // active-icon="success-black" are generated with fallback expressions xs.b(...)
+      // so unpassed props don't override component internal defaults with undefined.
+      const patch: Record<string, Record<string, string>> = {}
+      for (const [key, props] of Object.entries(mauiComponents)) {
+        const dashedName = toDashed(key)
+        const compPatch: Record<string, string> = {}
+        for (const [propName, defaultVal] of Object.entries(props)) {
+          if (defaultVal !== '' && defaultVal !== undefined && !propName.startsWith('bind')) {
+            compPatch[toDashed(propName)] = defaultVal
+          }
+        }
+        if (Object.keys(compPatch).length > 0) {
+          patch[dashedName] = compPatch
+        }
+      }
+      this.mergeThirdPartyComponents({
+        ...this.thirdPartyPatcher,
+        ...patch
+      })
+
       // Override buildTemplate to ensure MAUI components are registered in thirdPartyComponents
       // and all standard components are included in base.maml
       const origBuildTemplate = this.buildTemplate

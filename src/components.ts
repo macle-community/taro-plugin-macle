@@ -685,7 +685,7 @@ export const mauiComponents: Record<string, Record<string, string>> = {
     direction: "'horizontal'",
     'active-color': "'#07c160'",
     'inactive-color': "'#969799'",
-    'active-icon': "'checked'",
+    'active-icon': "'success-black'",
     'inactive-icon': _empty,
     bindClickStep: _empty
   },
