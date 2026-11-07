@@ -1,6 +1,6 @@
 {
   "name": "@macle-community/taro-plugin-macle",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Taro 3/4 platform plugin for Macle (Huawei / Ethio Telecom Mini Program)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
